@@ -11,22 +11,66 @@ echo "░ ░ ░ ▒   ▒ ░   ░   ░ ░ ░ ░░ ░     ░     ░ "
 echo "    ░ ░   ░           ░ ░  ░    ░     ░    ";
 echo "                                           ";
 
-# Add "add-apt-repository" command
-apt -y install software-properties-common curl apt-transport-https ca-certificates gnupg
-
-# Add additional repositories for PHP, Redis, and MariaDB
-LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
-
-# Add Redis official APT repository
-curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+# Function to check if a package is installed
+is_package_installed() {
+    dpkg-query -W -f='${Status}' $1 2>/dev/null | grep -q "install ok installed"
+}
 
 
-# Install Dependencies
-apt -y install php8.1 php8.1-{common,cli,gd,mysql,mbstring,bcmath,xml,fpm,curl,zip} mariadb-server nginx tar unzip git redis-server
+# Function to check if Composer is installed
+is_composer_installed() {
+    command -v composer &>/dev/null
+}
 
-# Install Composer
-curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
+# Check if the OS supports the apt command
+if ! command -v apt &>/dev/null; then
+    echo "Unsupported OS: apt command not found."
+    exit 1
+fi
+
+# Add "add-apt-repository" command if it's missing
+if ! is_package_installed software-properties-common; then
+    apt -y install software-properties-common curl apt-transport-https ca-certificates gnupg
+fi
+
+# Add "universe" repository for Ubuntu 18.04
+if grep -q "Ubuntu 18.04" /etc/os-release; then
+    if ! grep -q "universe" /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+        apt-add-repository universe
+    fi
+fi
+
+# Add additional repositories for PHP, Redis, and MariaDB (for Debian 11 and Ubuntu 22.04)
+if ! grep -q "ondrej/php" /etc/apt/sources.list /etc/apt/sources.list.d/*; then
+    LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+fi
+
+if ! is_package_installed mariadb-server; then
+    curl -sS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup | sudo bash
+fi
+
+# Update repositories list
+apt update
+
+# Install Dependencies if they are missing
+packages=("php8.1" "php8.1-cli" "php8.1-gd" "php8.1-mysql" "php8.1-pdo" "php8.1-mbstring" "php8.1-tokenizer" "php8.1-bcmath" "php8.1-xml" "php8.1-fpm" "php8.1-curl" "php8.1-zip" "mariadb-server" "nginx" "tar" "unzip" "git" "redis-server" "php8.1-intl" "git")
+missing_packages=()
+
+for package in "${packages[@]}"; do
+    if ! is_package_installed "$package"; then
+        missing_packages+=("$package")
+    fi
+done
+
+if [ "${#missing_packages[@]}" -gt 0 ]; then
+    apt -y install "${missing_packages[@]}"
+fi
+
+# Install Composer if it's missing
+if ! is_composer_installed; then
+    curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
+fi
+
 
 # Download files
 mkdir -p /var/www/pterodactyl
@@ -40,6 +84,7 @@ mysql -u root -p <<EOF
 CREATE USER 'pterodactyl'@'127.0.0.1' IDENTIFIED BY 'yourPassword';
 CREATE DATABASE panel;
 GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
 exit
 EOF
 
@@ -57,8 +102,26 @@ php artisan migrate --seed --force
 # Add The First User
 php artisan p:user:make
 
-# Set Perms
-chown -R www-data:www-data /var/www/pterodactyl/*
+# Function to check if the OS is CentOS
+is_centos() {
+    [[ -f "/etc/centos-release" ]]
+}
+
+# Function to set ownership and permissions based on the OS
+set_ownership_and_permissions() {
+    if is_centos; then
+        # CentOS commands
+        chown -R nginx:nginx /var/www/pterodactyl/
+        chmod -R 755 /var/www/pterodactyl/storage/* /var/www/pterodactyl/bootstrap/cache/
+    else
+        # Non-CentOS commands
+        chown -R www-data:www-data /var/www/pterodactyl/
+        chmod -R 755 /var/www/pterodactyl/storage/* /var/www/pterodactyl/bootstrap/cache/
+    fi
+}
+
+# Call the function to set ownership and permissions
+set_ownership_and_permissions
 
 # Pterodactyl Cron Job
 (crontab -l ; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
@@ -96,8 +159,6 @@ systemctl daemon-reload
 sudo systemctl enable --now pteroq.service
 sudo systemctl enable --now redis-server
 
-
-
 echo " ███▄    █   ▄████  ██▓ ███▄    █ ▒██   ██▒      ";
 echo " ██ ▀█   █  ██▒ ▀█▒▓██▒ ██ ▀█   █ ▒▒ █ █ ▒░      ";
 echo "▓██  ▀█ ██▒▒██░▄▄▄░▒██▒▓██  ▀█ ██▒░░  █   ░      ";
@@ -126,7 +187,7 @@ rm /etc/nginx/sites-enabled/default
 
 echo 'server {
     listen 80;
-    server_name <domain>;
+    server_name panel.oinkdom.xyz;
 
     root /var/www/pterodactyl/public;
     index index.html index.htm index.php;
