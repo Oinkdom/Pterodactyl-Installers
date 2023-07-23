@@ -183,13 +183,11 @@ echo "         ░                                       ";
 # Remove NGINX default conf
 rm /etc/nginx/sites-enabled/default
 
-read -p "Enter the server name (e.g., panel.example.com): " server_name
-
 # Nginx Config File
 
 echo 'server {
     listen 80;
-    server_name $server_name;
+    server_name localhost;
 
     root /var/www/pterodactyl/public;
     index index.html index.htm index.php;
